@@ -2,20 +2,17 @@
 # Prerequisites:
 # - Feed URL matches .npmrc / package.json publishConfig.
 # - Feed has npmjs.org as an upstream source (so npm ci can resolve public packages).
-# - Build Service: grant the feed's Contributor (or Feed Publisher) role to
-#   "Project Collection Build Service (<Org>)" or "<Project> Build Service" as needed.
+# - Build Service: grant the feed's Contributor role to BOTH:
+#   "Project Collection Build Service (<Org>)" AND "<Project> Build Service (<Org>)"
+# - package.json must have publishConfig pointing to your feed registry.
 # Bump package.json version before each publish (duplicate versions are rejected).
 #
-# Publishing is controlled at RUNTIME (Publish stage is always present; it skips unless):
+# Publishing is controlled at RUNTIME:
 # - Parameter publishPackage is the string 'true', OR
 # - Variable PublishToArtifacts is true (string compare).
 #
-# If a PARENT pipeline always passes publishPackage: "false", the parameter path will NOT
-# publish. Either change the parent to pass 'true' when you want a release, OR set variable
-# PublishToArtifacts=true on THIS pipeline (Variables / queue-time / variable group).
-#
-# 403 AddPackage on npm publish: grant Feed Publisher to BOTH build identities on the feed,
-# or set secret variable ARTIFACTS_NPM_PAT (PAT with Packaging read & write) — see README.
+# 403 AddPackage on npm publish: grant Contributor to BOTH build identities on the feed,
+# or set secret variable ARTIFACTS_NPM_PAT (PAT with Packaging read & write).
 
 parameters:
   - name: publishPackage
@@ -55,19 +52,40 @@ stages:
             displayName: Use Node.js
             inputs:
               versionSpec: $(NODE_VERSION)
+
+          # FIX 1: Guard against missing .npmrc — npmAuthenticate silently
+          # succeeds even without the file, causing confusing failures later.
+          - script: |
+              if [ ! -f "$(Build.SourcesDirectory)/.npmrc" ]; then
+                echo "##[error].npmrc not found at repo root. Create it pointing to your feed."
+                echo "##[error]Example:"
+                echo "##[error]registry=https://pkgs.dev.azure.com/CloudInnovateAzureOrg/_packaging/CloudInnovateAzureOrg/npm/registry/"
+                echo "##[error]always-auth=true"
+                exit 1
+              fi
+              echo ".npmrc found."
+            displayName: Verify .npmrc exists
+
           - task: npmAuthenticate@0
             displayName: npm authenticate (Azure Artifacts)
             inputs:
               workingFile: $(Build.SourcesDirectory)/.npmrc
+
           - script: npm ci
             displayName: npm ci
+
           - script: npm test
             displayName: npm test
+
+          # FIX 2: Publish build artifact so Publish stage uses exactly what was tested,
+          # avoiding a redundant npm ci and any workspace drift on self-hosted agents.
+          - publish: $(Build.SourcesDirectory)
+            artifact: npm-package
+            displayName: Publish pipeline artifact
 
   - stage: Publish
     displayName: Publish
     dependsOn: Build
-    # Publish if: publishPackage=='true' OR PublishToArtifacts==true (parent can force false via param; use variable to override).
     condition: and(succeeded(), or(eq('${{ parameters.publishPackage }}', 'true'), eq(variables['PublishToArtifacts'], 'true')))
     jobs:
       - job: NpmPublish
@@ -77,24 +95,57 @@ stages:
             displayName: Use Node.js
             inputs:
               versionSpec: $(NODE_VERSION)
+
+          # FIX 2 (cont): Download the artifact built and tested above.
+          - download: current
+            artifact: npm-package
+            displayName: Download pipeline artifact
+
+          # FIX 1 (cont): Guard again in Publish stage — artifact download
+          # restores the file, but verify before authenticating.
+          - script: |
+              if [ ! -f "$(Pipeline.Workspace)/npm-package/.npmrc" ]; then
+                echo "##[error].npmrc missing from downloaded artifact. Check Build stage."
+                exit 1
+              fi
+              echo ".npmrc verified in artifact."
+            displayName: Verify .npmrc in artifact
+
           - task: npmAuthenticate@0
             displayName: npm authenticate (Azure Artifacts)
             inputs:
-              workingFile: $(Build.SourcesDirectory)/.npmrc
-          - script: npm ci
-            displayName: npm ci
-          # If build service still gets 403 AddPackage after Feed Publisher on both identities,
-          # add a secret pipeline variable ARTIFACTS_NPM_PAT (PAT: Packaging Read & write).
-          # This appends auth before publish only; npm ci keeps using npmAuthenticate.
+              workingFile: $(Pipeline.Workspace)/npm-package/.npmrc
+
+          # FIX 3: Pre-publish version collision check.
+          # Duplicate versions return a confusing 403/409. Fail fast with a clear message.
           - script: |
               set -e
-              RC="$(Build.SourcesDirectory)/.npmrc"
+              cd "$(Pipeline.Workspace)/npm-package"
+              FEED="https://pkgs.dev.azure.com/CloudInnovateAzureOrg/_packaging/CloudInnovateAzureOrg/npm/registry/"
+              PKG_NAME=$(node -p "require('./package.json').name")
+              PKG_VERSION=$(node -p "require('./package.json').version")
+              echo "Checking if ${PKG_NAME}@${PKG_VERSION} already exists in feed..."
+              EXISTS=$(npm view "${PKG_NAME}@${PKG_VERSION}" version --registry "$FEED" 2>/dev/null || true)
+              if [ -n "$EXISTS" ]; then
+                echo "##[error]Version ${PKG_VERSION} already published. Bump package.json version before publishing."
+                exit 1
+              fi
+              echo "Version ${PKG_VERSION} is new — safe to publish."
+            displayName: Check version not already published
+
+          # FIX 4: PAT fallback for stubborn 403 AddPackage errors.
+          # FIX 5: Cross-platform base64 — single pipeline works on Linux and macOS agents.
+          # Set secret pipeline variable ARTIFACTS_NPM_PAT (PAT: Packaging Read & write) to activate.
+          - script: |
+              set -e
+              RC="$(Pipeline.Workspace)/npm-package/.npmrc"
               if [ -z "${ARTIFACTS_NPM_PAT:-}" ]; then
-                echo "ARTIFACTS_NPM_PAT not set; using npm authenticate token for publish"
+                echo "ARTIFACTS_NPM_PAT not set; using npmAuthenticate token for publish."
                 exit 0
               fi
               echo "##[section]Appending PAT credentials for npm publish"
-              B64=$(printf '%s' "$ARTIFACTS_NPM_PAT" | base64 -w0 2>/dev/null || printf '%s' "$ARTIFACTS_NPM_PAT" | base64 | tr -d '\n')
+              # FIX 5: tr -d '\n\r' handles both Linux and macOS base64 output safely.
+              B64=$(printf '%s' "$ARTIFACTS_NPM_PAT" | base64 | tr -d '\n\r')
               {
                 echo ""
                 echo "; PAT auth for publish (secret variable ARTIFACTS_NPM_PAT)"
@@ -105,8 +156,13 @@ stages:
                 echo "//pkgs.dev.azure.com/CloudInnovateAzureOrg/_packaging/CloudInnovateAzureOrg/npm/:_password=${B64}"
                 echo "//pkgs.dev.azure.com/CloudInnovateAzureOrg/_packaging/CloudInnovateAzureOrg/npm/:email=npm@local"
               } >> "$RC"
-            displayName: Optional PAT for npm publish (403 AddPackage)
+              echo "PAT credentials appended to .npmrc."
+            displayName: Optional PAT for npm publish (403 AddPackage fallback)
             env:
               ARTIFACTS_NPM_PAT: $(ARTIFACTS_NPM_PAT)
-          - script: npm publish
+
+          - script: |
+              cd "$(Pipeline.Workspace)/npm-package"
+              npm publish
             displayName: npm publish
+            workingDirectory: $(Pipeline.Workspace)/npm-package
