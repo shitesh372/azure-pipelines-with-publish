@@ -5,6 +5,10 @@
 # - Build Service: grant the feed's Contributor (or Feed Publisher) role to
 #   "Project Collection Build Service (<Org>)" or "<Project> Build Service" as needed.
 # Run with publishPackage=true when you intend to publish. Bump package.json version first.
+#
+# If a parent pipeline invokes this one (or you use Run pipeline), publishPackage defaults
+# to false — only Build runs. Set publishPackage to true in the parent parameters / Run
+# dialog when you want the Publish stage (Azure Artifacts) to run.
 
 parameters:
   - name: publishPackage
