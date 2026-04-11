@@ -18,6 +18,9 @@
     "demo"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "registry": "https://pkgs.dev.azure.com/CloudInnovateAzureOrg/_packaging/CloudInnovateAzureOrg/npm/registry/"
+  },
   "engines": {
     "node": ">=18"
   },

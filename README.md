@@ -12,8 +12,8 @@ This repository is a small **hands-on example** for learning **Azure DevOps Pipe
 | **Pipeline stages** | **Build** (install + test) runs first; **Publish** runs only when you opt in. |
 | **Triggers** | Commits to `main` / `master` run the pipeline; PRs run validation too. |
 | **Quality gate** | Tests must pass before the Publish stage is allowed to run. |
-| **Secrets** | `NPM_TOKEN` is not stored in code; Azure DevOps injects it at runtime. |
-| **npm publish** | Optional stage publishes the package using a token, not your password. |
+| **Secrets** | No npm password in git: the **`npm authenticate`** task adds short-lived credentials for your Azure Artifacts feed during the run. |
+| **npm publish** | Optional stage runs **`npm publish`** to your **Azure Artifacts** feed (see `publishConfig` in `package.json`). |
 
 This aligns with classroom themes such as pipeline stages (build, test, release), triggers (CI vs PR), approvals and gates (tests as a gate; optional manual approvals in Azure DevOps UI), and shipping artifacts (npm package).
 
@@ -39,9 +39,13 @@ This aligns with classroom themes such as pipeline stages (build, test, release)
 
 `npm ci` installs exactly what `package-lock.json` specifies. It is **deterministic** and preferred in CI so every run uses the same dependency tree.
 
-### npm publish and tokens
+### npm publish to Azure Artifacts
 
-Publishing uses an **automation token** from npm (or your registry), stored as **`NPM_TOKEN`** in Azure DevOps **Library** → **Variable groups** or pipeline variables (mark it **secret**). The pipeline writes it into `.npmrc` only on the agent; it is not committed to git.
+The repo includes a **committed** `.npmrc` with only the **feed URL** and `always-auth=true` (no secrets). In the pipeline, the **`npmAuthenticate@0`** task runs before `npm ci` and before `npm publish`, and injects credentials for the same Azure DevOps organization.
+
+**Feed setup:** Enable **npmjs.org** as an **upstream source** on the feed so `npm ci` can install public packages (`express`, `jest`, etc.) through the feed.
+
+**Permissions:** In **Artifacts** → your feed → **Feed settings** → **Permissions**, allow **Project Collection Build Service** (and/or your project’s **Build Service**) to **Contributor** or **Feed Publisher** as required so the pipeline can read and publish packages.
 
 ### Azure Artifacts on your Mac (why `vsts-npm-auth` fails)
 
@@ -177,20 +181,17 @@ Tests use **Jest** and **Supertest** (HTTP assertions against the Express app wi
 1. Push this repository to **Azure Repos**, **GitHub**, or another supported host connected to Azure DevOps.
 2. In Azure DevOps: **Pipelines** → **New pipeline** → select the repo → **Existing Azure Pipelines YAML file** → choose `/azure-pipelines.yml`.
 3. Run the pipeline. The **Build** stage should pass (install + test).
-4. To enable **Publish**:
-   - Create an npm **access token** (npmjs.com → Access Tokens).
-   - In Azure DevOps: **Pipelines** → your pipeline → **Edit** → **Variables** → add **`NPM_TOKEN`** as a **secret** (or use a variable group).
-   - **Run pipeline** and set the parameter **Publish package to npm** to **true**.
-   - Bump **`version`** in `package.json` before each successful publish (npm rejects duplicate versions).
+4. Ensure the **Azure Artifacts** feed has **npmjs.org** upstream and the **build identities** can use the feed (see *npm publish to Azure Artifacts* above).
+5. To publish: **Run pipeline** and set **Publish package to Azure Artifacts** to **true**. Bump **`version`** in `package.json` before each publish (duplicate versions are rejected).
 
-If you do not set `NPM_TOKEN`, leave **Publish** disabled so only CI runs.
+For **local** `npm install` against this feed, add your Personal Access Token to **`~/.npmrc`** (auth block); keep secrets out of the committed project `.npmrc`.
 
 ---
 
 ## Project layout
 
 ```
-azure-pipelines.yml   # CI + optional npm publish
+azure-pipelines.yml   # CI + optional Azure Artifacts npm publish
 package.json
 src/
   app.js              # Express app factory (used by tests and server)

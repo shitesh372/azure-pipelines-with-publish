@@ -1,10 +1,14 @@
-# Azure DevOps pipeline: install, test, optional npm publish.
-# Set secret variable NPM_TOKEN in the pipeline library for Publish.
-# Run with parameter publishPackage=true only when you intend to publish.
+# Azure DevOps: test, then optionally publish to Azure Artifacts (npm feed).
+# Prerequisites:
+# - Feed URL matches .npmrc / package.json publishConfig.
+# - Feed has npmjs.org as an upstream source (so npm ci can resolve public packages).
+# - Build Service: grant the feed's Contributor (or Feed Publisher) role to
+#   "Project Collection Build Service (<Org>)" or "<Project> Build Service" as needed.
+# Run with publishPackage=true when you intend to publish. Bump package.json version first.
 
 parameters:
   - name: publishPackage
-    displayName: Publish package to npm
+    displayName: Publish package to Azure Artifacts
     type: boolean
     default: false
 
@@ -37,6 +41,10 @@ stages:
             displayName: Use Node.js
             inputs:
               versionSpec: $(NODE_VERSION)
+          - task: npmAuthenticate@0
+            displayName: npm authenticate (Azure Artifacts)
+            inputs:
+              workingFile: $(Build.SourcesDirectory)/.npmrc
           - script: npm ci
             displayName: npm ci
           - script: npm test
@@ -48,19 +56,17 @@ stages:
     condition: and(succeeded(), eq('${{ parameters.publishPackage }}', true))
     jobs:
       - job: NpmPublish
-        displayName: npm publish
+        displayName: npm publish to Azure Artifacts
         steps:
           - task: NodeTool@0
             displayName: Use Node.js
             inputs:
               versionSpec: $(NODE_VERSION)
+          - task: npmAuthenticate@0
+            displayName: npm authenticate (Azure Artifacts)
+            inputs:
+              workingFile: $(Build.SourcesDirectory)/.npmrc
           - script: npm ci
             displayName: npm ci
-          - script: echo "//registry.npmjs.org/:_authToken=$(NPM_TOKEN)" > .npmrc
-            displayName: Configure npm registry auth
-            env:
-              NPM_TOKEN: $(NPM_TOKEN)
-          - script: npm publish --access public
+          - script: npm publish
             displayName: npm publish
-            env:
-              NPM_TOKEN: $(NPM_TOKEN)
