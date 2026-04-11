@@ -13,6 +13,9 @@
 # If a PARENT pipeline always passes publishPackage: "false", the parameter path will NOT
 # publish. Either change the parent to pass 'true' when you want a release, OR set variable
 # PublishToArtifacts=true on THIS pipeline (Variables / queue-time / variable group).
+#
+# 403 AddPackage on npm publish: grant Feed Publisher to BOTH build identities on the feed,
+# or set secret variable ARTIFACTS_NPM_PAT (PAT with Packaging read & write) — see README.
 
 parameters:
   - name: publishPackage
@@ -80,5 +83,30 @@ stages:
               workingFile: $(Build.SourcesDirectory)/.npmrc
           - script: npm ci
             displayName: npm ci
+          # If build service still gets 403 AddPackage after Feed Publisher on both identities,
+          # add a secret pipeline variable ARTIFACTS_NPM_PAT (PAT: Packaging Read & write).
+          # This appends auth before publish only; npm ci keeps using npmAuthenticate.
+          - script: |
+              set -e
+              RC="$(Build.SourcesDirectory)/.npmrc"
+              if [ -z "${ARTIFACTS_NPM_PAT:-}" ]; then
+                echo "ARTIFACTS_NPM_PAT not set; using npm authenticate token for publish"
+                exit 0
+              fi
+              echo "##[section]Appending PAT credentials for npm publish"
+              B64=$(printf '%s' "$ARTIFACTS_NPM_PAT" | base64 -w0 2>/dev/null || printf '%s' "$ARTIFACTS_NPM_PAT" | base64 | tr -d '\n')
+              {
+                echo ""
+                echo "; PAT auth for publish (secret variable ARTIFACTS_NPM_PAT)"
+                echo "//pkgs.dev.azure.com/CloudInnovateAzureOrg/_packaging/CloudInnovateAzureOrg/npm/registry/:username=pat"
+                echo "//pkgs.dev.azure.com/CloudInnovateAzureOrg/_packaging/CloudInnovateAzureOrg/npm/registry/:_password=${B64}"
+                echo "//pkgs.dev.azure.com/CloudInnovateAzureOrg/_packaging/CloudInnovateAzureOrg/npm/registry/:email=npm@local"
+                echo "//pkgs.dev.azure.com/CloudInnovateAzureOrg/_packaging/CloudInnovateAzureOrg/npm/:username=pat"
+                echo "//pkgs.dev.azure.com/CloudInnovateAzureOrg/_packaging/CloudInnovateAzureOrg/npm/:_password=${B64}"
+                echo "//pkgs.dev.azure.com/CloudInnovateAzureOrg/_packaging/CloudInnovateAzureOrg/npm/:email=npm@local"
+              } >> "$RC"
+            displayName: Optional PAT for npm publish (403 AddPackage)
+            env:
+              ARTIFACTS_NPM_PAT: $(ARTIFACTS_NPM_PAT)
           - script: npm publish
             displayName: npm publish

@@ -45,7 +45,21 @@ The repo includes a **committed** `.npmrc` with only the **feed URL** and `alway
 
 **Feed setup:** Enable **npmjs.org** as an **upstream source** on the feed so `npm ci` can install public packages (`express`, `jest`, etc.) through the feed.
 
-**Permissions:** In **Artifacts** → your feed → **Feed settings** → **Permissions**, allow **Project Collection Build Service** (and/or your project’s **Build Service**) to **Contributor** or **Feed Publisher** as required so the pipeline can read and publish packages.
+**Permissions (install + publish):** In **Artifacts** → your feed → **Feed settings** → **Permissions**, add these identities and grant at least **Feed Publisher** (or **Owner**) so the pipeline can **push** packages (**AddPackage**). **Reader** / download-only roles are not enough for `npm publish`.
+
+- **`[Your project] Build Service ([Organization])`** — e.g. `EduStream-AI Build Service (CloudInnovateAzureOrg)`
+- **`Project Collection Build Service ([Organization])`** — org-wide build identity
+
+If `npm publish` fails with **`403 Forbidden`** and **`You need to have 'AddPackage'`**, work through this list:
+
+1. **Two identities, both Feed Publisher** — By default, build accounts get **Collaborator** (read/save upstream), **not** publish. Add **both** and set each to **Feed Publisher (Contributor)** (not only Reader/Collaborator):
+   - **`EduStream-AI Build Service (CloudInnovateAzureOrg)`** (replace with your **project** name)
+   - **`Project Collection Build Service (CloudInnovateAzureOrg)`**
+2. **Feed scope** — This feed is **organization-scoped**. Open **Organization** → **Artifacts** (or **Project** → **Artifacts**) and edit permissions on the **same** feed URL your `.npmrc` uses.
+3. **Pipeline in another project** — If the pipeline lives in a **different** project than the feed, the **project** build identity needs access on **that** feed; you may need to add the identity from the pipeline’s project explicitly.
+4. **Job authorization** — In **Project settings** → **Pipelines** → **Settings**, review **Limit job authorization scope to referenced Azure DevOps repositories** / related options; a very restrictive scope can block the token **`npm authenticate`** expects for org-scoped feeds (see [scoped build identities](https://learn.microsoft.com/en-us/azure/devops/pipelines/process/access-tokens?view=azure-devops)).
+5. **PAT fallback in the pipeline** — If permissions still fail, add a **secret** variable **`ARTIFACTS_NPM_PAT`**: create a **Personal access token** with **Packaging** → **Read & write**, paste it into the variable, and re-run. The pipeline appends PAT-based auth to `.npmrc` **immediately before** `npm publish` (see `azure-pipelines.yml`). That bypasses build-identity publishing while **`npm ci`** still uses **`npm authenticate`**.
+6. **Duplicate version** — If **`1.0.0`** already exists in the feed, bump **`version`** in `package.json` and commit; otherwise publish can also fail (sometimes reported similarly).
 
 ### Azure Artifacts on your Mac (why `vsts-npm-auth` fails)
 
