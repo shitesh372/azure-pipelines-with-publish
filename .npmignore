@@ -1,0 +1,8 @@
+tests/
+coverage/
+azure-pipelines.yml
+.gitignore
+spec.md
+*.test.js
+.env
+.env.*
