@@ -191,6 +191,11 @@ Tests use **Jest** and **Supertest** (HTTP assertions against the Express app wi
 
 **Parent pipelines / completion triggers:** Often **parameters are not passed**, so `publishPackage` stays **`false`** and publish would never run. Fix by either passing **`publishPackage: 'true'`** from the parent template, or setting variable **`PublishToArtifacts=true`** on the pipeline (or in a variable group) for runs that should publish.
 
+**Parent passes `publishPackage: "false"` (your case):** That value **disables** publishing via the parameter. You have two options:
+
+1. **Override with a variable (no parent change):** In **this** pipeline → **Edit** → **Variables** → add **`PublishToArtifacts`** = **`true`** (check **Let users override this value at queue time** if you only want it sometimes). Queue the run and set **`PublishToArtifacts`** to **`true`** when you want **`npm publish`** to Azure Artifacts. The condition is `publishPackage == 'true'` **OR** `PublishToArtifacts == 'true'`, so the variable can still enable Publish even when the parent sends **`false`**.
+2. **Change the parent:** When a release should publish, have the parent pass **`publishPackage: 'true'`** (string) in its template / `parameters` block.
+
 For **local** `npm install` against this feed, add your Personal Access Token to **`~/.npmrc`** (auth block); keep secrets out of the committed project `.npmrc`.
 
 ---

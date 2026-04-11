@@ -7,8 +7,12 @@
 # Bump package.json version before each publish (duplicate versions are rejected).
 #
 # Publishing is controlled at RUNTIME (Publish stage is always present; it skips unless):
-# - Run pipeline: set parameter "Publish package to Azure Artifacts" to true, OR
-# - Set pipeline/queue variable PublishToArtifacts=true (for parent triggers that cannot pass parameters).
+# - Parameter publishPackage is the string 'true', OR
+# - Variable PublishToArtifacts is true (string compare).
+#
+# If a PARENT pipeline always passes publishPackage: "false", the parameter path will NOT
+# publish. Either change the parent to pass 'true' when you want a release, OR set variable
+# PublishToArtifacts=true on THIS pipeline (Variables / queue-time / variable group).
 
 parameters:
   - name: publishPackage
@@ -60,8 +64,7 @@ stages:
   - stage: Publish
     displayName: Publish
     dependsOn: Build
-    # String compare: parameter is 'true' or 'false'. Optional variable PublishToArtifacts=true
-    # for pipeline-completion / parent runs that do not supply parameters (they keep default).
+    # Publish if: publishPackage=='true' OR PublishToArtifacts==true (parent can force false via param; use variable to override).
     condition: and(succeeded(), or(eq('${{ parameters.publishPackage }}', 'true'), eq(variables['PublishToArtifacts'], 'true')))
     jobs:
       - job: NpmPublish
