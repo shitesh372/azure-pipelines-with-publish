@@ -4,21 +4,20 @@
 # - Feed has npmjs.org as an upstream source (so npm ci can resolve public packages).
 # - Build Service: grant the feed's Contributor (or Feed Publisher) role to
 #   "Project Collection Build Service (<Org>)" or "<Project> Build Service" as needed.
-# Run with publishPackage=true when you intend to publish. Bump package.json version first.
+# Bump package.json version before each publish (duplicate versions are rejected).
 #
-# If a parent pipeline invokes this one (or you use Run pipeline), publishPackage defaults
-# to false — only Build runs. Set publishPackage to true in the parent parameters / Run
-# dialog when you want the Publish stage (Azure Artifacts) to run.
-#
-# The Publish stage is included only when publishPackage is true (template compile time).
-# Do not use runtime condition eq('${{ parameters.publishPackage }}', true) — that compares
-# a string to a boolean and the Publish stage would never run.
+# Publishing is controlled at RUNTIME (Publish stage is always present; it skips unless):
+# - Run pipeline: set parameter "Publish package to Azure Artifacts" to true, OR
+# - Set pipeline/queue variable PublishToArtifacts=true (for parent triggers that cannot pass parameters).
 
 parameters:
   - name: publishPackage
     displayName: Publish package to Azure Artifacts
-    type: boolean
-    default: false
+    type: string
+    default: 'false'
+    values:
+      - 'true'
+      - 'false'
 
 trigger:
   branches:
@@ -58,23 +57,25 @@ stages:
           - script: npm test
             displayName: npm test
 
-  - ${{ if eq(parameters.publishPackage, true) }}:
-    - stage: Publish
-      displayName: Publish
-      dependsOn: Build
-      jobs:
-        - job: NpmPublish
-          displayName: npm publish to Azure Artifacts
-          steps:
-            - task: NodeTool@0
-              displayName: Use Node.js
-              inputs:
-                versionSpec: $(NODE_VERSION)
-            - task: npmAuthenticate@0
-              displayName: npm authenticate (Azure Artifacts)
-              inputs:
-                workingFile: $(Build.SourcesDirectory)/.npmrc
-            - script: npm ci
-              displayName: npm ci
-            - script: npm publish
-              displayName: npm publish
+  - stage: Publish
+    displayName: Publish
+    dependsOn: Build
+    # String compare: parameter is 'true' or 'false'. Optional variable PublishToArtifacts=true
+    # for pipeline-completion / parent runs that do not supply parameters (they keep default).
+    condition: and(succeeded(), or(eq('${{ parameters.publishPackage }}', 'true'), eq(variables['PublishToArtifacts'], 'true')))
+    jobs:
+      - job: NpmPublish
+        displayName: npm publish to Azure Artifacts
+        steps:
+          - task: NodeTool@0
+            displayName: Use Node.js
+            inputs:
+              versionSpec: $(NODE_VERSION)
+          - task: npmAuthenticate@0
+            displayName: npm authenticate (Azure Artifacts)
+            inputs:
+              workingFile: $(Build.SourcesDirectory)/.npmrc
+          - script: npm ci
+            displayName: npm ci
+          - script: npm publish
+            displayName: npm publish
