@@ -184,7 +184,9 @@ Tests use **Jest** and **Supertest** (HTTP assertions against the Express app wi
 4. Ensure the **Azure Artifacts** feed has **npmjs.org** upstream and the **build identities** can use the feed (see *npm publish to Azure Artifacts* above).
 5. To publish: **Run pipeline** and set **Publish package to Azure Artifacts** to **true**. Bump **`version`** in `package.json` before each publish (duplicate versions are rejected).
 
-**Runtime parameter `publishPackage`:** Default is **`false`**, so a normal CI run only executes **Build** (install + test). If a **parent pipeline** passes `publishPackage: false` (or leaves the default), the **Publish** stage is skipped on purpose. To publish from a parent, pass **`publishPackage: true`** in that pipeline’s parameters (for `extends` / template) or run this pipeline manually and set the parameter to **true**.
+**Runtime parameter `publishPackage`:** Default is **`false`**, so a normal CI run only executes **Build** (install + test). If a **parent pipeline** passes `publishPackage: false` (or leaves the default), the **Publish** stage is omitted from the run on purpose. To publish from a parent, pass **`publishPackage: true`** in that pipeline’s parameters (for `extends` / template) or run this pipeline manually and set the parameter to **true**.
+
+The pipeline uses a **template `if`** (`${{ if eq(parameters.publishPackage, true) }}`) so the Publish stage is **included in the YAML only when** you choose to publish. A runtime `condition` like `eq('${{ parameters.publishPackage }}', true)` is incorrect because the left side is a **string**, so the Publish stage would never run.
 
 For **local** `npm install` against this feed, add your Personal Access Token to **`~/.npmrc`** (auth block); keep secrets out of the committed project `.npmrc`.
 

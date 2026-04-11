@@ -9,6 +9,10 @@
 # If a parent pipeline invokes this one (or you use Run pipeline), publishPackage defaults
 # to false — only Build runs. Set publishPackage to true in the parent parameters / Run
 # dialog when you want the Publish stage (Azure Artifacts) to run.
+#
+# The Publish stage is included only when publishPackage is true (template compile time).
+# Do not use runtime condition eq('${{ parameters.publishPackage }}', true) — that compares
+# a string to a boolean and the Publish stage would never run.
 
 parameters:
   - name: publishPackage
@@ -54,23 +58,23 @@ stages:
           - script: npm test
             displayName: npm test
 
-  - stage: Publish
-    displayName: Publish
-    dependsOn: Build
-    condition: and(succeeded(), eq('${{ parameters.publishPackage }}', true))
-    jobs:
-      - job: NpmPublish
-        displayName: npm publish to Azure Artifacts
-        steps:
-          - task: NodeTool@0
-            displayName: Use Node.js
-            inputs:
-              versionSpec: $(NODE_VERSION)
-          - task: npmAuthenticate@0
-            displayName: npm authenticate (Azure Artifacts)
-            inputs:
-              workingFile: $(Build.SourcesDirectory)/.npmrc
-          - script: npm ci
-            displayName: npm ci
-          - script: npm publish
-            displayName: npm publish
+  - ${{ if eq(parameters.publishPackage, true) }}:
+    - stage: Publish
+      displayName: Publish
+      dependsOn: Build
+      jobs:
+        - job: NpmPublish
+          displayName: npm publish to Azure Artifacts
+          steps:
+            - task: NodeTool@0
+              displayName: Use Node.js
+              inputs:
+                versionSpec: $(NODE_VERSION)
+            - task: npmAuthenticate@0
+              displayName: npm authenticate (Azure Artifacts)
+              inputs:
+                workingFile: $(Build.SourcesDirectory)/.npmrc
+            - script: npm ci
+              displayName: npm ci
+            - script: npm publish
+              displayName: npm publish
