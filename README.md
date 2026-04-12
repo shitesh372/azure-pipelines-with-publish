@@ -1,240 +1,418 @@
 # Azure Pipelines demo: Express products API
 
-This repository is a small **hands-on example** for learning **Azure DevOps Pipelines** with a real Node.js app: an Express REST API for products, automated tests, and an optional **npm publish** stage.
+A hands-on example for learning **Azure DevOps Pipelines** with a real Node.js app: an Express REST API for products, automated tests, and an optional **npm publish** stage.
+
+---
+
+## Table of contents
+
+1. [What you will learn](#what-you-will-learn)
+2. [Prerequisites](#prerequisites)
+3. [Clone the repository](#clone-the-repository)
+4. [Install dependencies](#install-dependencies)
+5. [Run the server locally](#run-the-server-locally)
+6. [Try the API](#try-the-api)
+7. [Run tests](#run-tests)
+8. [Wire up Azure Pipelines](#wire-up-azure-pipelines)
+9. [Publish to Azure Artifacts (npm)](#publish-to-azure-artifacts-npm)
+10. [Project layout](#project-layout)
+11. [Concepts reference](#concepts-reference)
 
 ---
 
 ## What you will learn
 
 | Topic | How this repo demonstrates it |
-|--------|-------------------------------|
+|-------|-------------------------------|
 | **CI (continuous integration)** | Every push or PR runs install + tests on a clean agent. |
 | **Pipeline stages** | **Build** (install + test) runs first; **Publish** runs only when you opt in. |
 | **Triggers** | Commits to `main` / `master` run the pipeline; PRs run validation too. |
 | **Quality gate** | Tests must pass before the Publish stage is allowed to run. |
-| **Secrets** | No npm password in git: the **`npm authenticate`** task adds short-lived credentials for your Azure Artifacts feed during the run. |
-| **npm publish** | Optional stage runs **`npm publish`** to your **Azure Artifacts** feed (see `publishConfig` in `package.json`). |
-
-This aligns with classroom themes such as pipeline stages (build, test, release), triggers (CI vs PR), approvals and gates (tests as a gate; optional manual approvals in Azure DevOps UI), and shipping artifacts (npm package).
-
----
-
-## Concepts (short reference)
-
-### CI/CD in one minute
-
-- **Continuous Integration (CI):** Merge code often; each change is built and tested automatically so breaks are caught early.
-- **Continuous Delivery / Deployment (CD):** After CI passes, you automate delivery to an environment (here: publishing to npm; in other labs: App Service, containers, etc.).
-
-### Azure Pipelines building blocks
-
-1. **Pipeline** — YAML file (`azure-pipelines.yml`) that defines what runs and when.
-2. **Trigger** — What starts a run (e.g. push to `main`, or a pull request).
-3. **Stage** — A major phase (e.g. Build, then Publish). Stages run in order unless you parallelize.
-4. **Job** — A group of steps that run on one agent (e.g. Ubuntu VM).
-5. **Step** — A single action: install Node, run `npm ci`, run tests, etc.
-6. **Condition** — Logic such as “only run Publish if Build succeeded **and** I chose to publish.”
-
-### Why `npm ci` in the pipeline?
-
-`npm ci` installs exactly what `package-lock.json` specifies. It is **deterministic** and preferred in CI so every run uses the same dependency tree.
-
-### npm publish to Azure Artifacts
-
-The repo includes a **committed** `.npmrc` with only the **feed URL** and `always-auth=true` (no secrets). In the pipeline, the **`npmAuthenticate@0`** task runs before `npm ci` and before `npm publish`, and injects credentials for the same Azure DevOps organization.
-
-**Feed setup:** Enable **npmjs.org** as an **upstream source** on the feed so `npm ci` can install public packages (`express`, `jest`, etc.) through the feed.
-
-**Permissions (install + publish):** In **Artifacts** → your feed → **Feed settings** → **Permissions**, add these identities and grant at least **Feed Publisher** (or **Owner**) so the pipeline can **push** packages (**AddPackage**). **Reader** / download-only roles are not enough for `npm publish`.
-
-- **`[Your project] Build Service ([Organization])`** — e.g. `EduStream-AI Build Service (CloudInnovateAzureOrg)`
-- **`Project Collection Build Service ([Organization])`** — org-wide build identity
-
-If `npm publish` fails with **`403 Forbidden`** and **`You need to have 'AddPackage'`**, work through this list:
-
-1. **Two identities, both Feed Publisher** — By default, build accounts get **Collaborator** (read/save upstream), **not** publish. Add **both** and set each to **Feed Publisher (Contributor)** (not only Reader/Collaborator):
-   - **`EduStream-AI Build Service (CloudInnovateAzureOrg)`** (replace with your **project** name)
-   - **`Project Collection Build Service (CloudInnovateAzureOrg)`**
-2. **Feed scope** — This feed is **organization-scoped**. Open **Organization** → **Artifacts** (or **Project** → **Artifacts**) and edit permissions on the **same** feed URL your `.npmrc` uses.
-3. **Pipeline in another project** — If the pipeline lives in a **different** project than the feed, the **project** build identity needs access on **that** feed; you may need to add the identity from the pipeline’s project explicitly.
-4. **Job authorization** — In **Project settings** → **Pipelines** → **Settings**, review **Limit job authorization scope to referenced Azure DevOps repositories** / related options; a very restrictive scope can block the token **`npm authenticate`** expects for org-scoped feeds (see [scoped build identities](https://learn.microsoft.com/en-us/azure/devops/pipelines/process/access-tokens?view=azure-devops)).
-5. **PAT fallback in the pipeline** — If permissions still fail, add a **secret** variable **`ARTIFACTS_NPM_PAT`**: create a **Personal access token** with **Packaging** → **Read & write**, paste it into the variable, and re-run. The pipeline appends PAT-based auth to `.npmrc` **immediately before** `npm publish` (see `azure-pipelines.yml`). That bypasses build-identity publishing while **`npm ci`** still uses **`npm authenticate`**.
-6. **Duplicate version** — If **`1.0.0`** already exists in the feed, bump **`version`** in `package.json` and commit; otherwise publish can also fail (sometimes reported similarly).
-
-### Azure Artifacts on your Mac (why `vsts-npm-auth` fails)
-
-If you see `zsh: command not found: vsts-npm-auth`, the tool is simply **not installed**. Installing it is **not** the recommended path on macOS:
-
-- **`vsts-npm-auth`** is aimed at **Windows** in Microsoft’s “Connect to feed” flow. On **macOS and Linux**, Azure DevOps expects you to use a **Personal Access Token (PAT)** in your **user-level** `~/.npmrc`, not a separate login executable.
-- Keep **only the feed URL** (and `always-auth=true`) in the **project** `.npmrc` so it can be committed. Put **credentials** in **`~/.npmrc`** so they are never committed.
-
-**Steps:**
-
-1. In Azure DevOps: **User settings** → **Personal access tokens** → create a token with **Packaging** read/write (and scope it to your organization).
-2. Base64-encode the PAT (macOS):
-
-   ```bash
-   echo -n "YOUR_PASTE_TOKEN_HERE" | base64
-   ```
-
-   Copy the single line of output (no newlines in the token when encoding).
-
-3. In **`~/.npmrc`**, add the **auth token block** from **Artifacts** → your feed → **Connect to feed** → **npm** → **Other** (non-Windows). Use your organization and feed names in the URLs. For an **organization-scoped** feed whose registry looks like  
-   `https://pkgs.dev.azure.com/<ORG>/_packaging/<FEED>/npm/registry/`,  
-   the block includes lines for both `.../npm/registry/` and `.../npm/` (see [Connect to an Azure Artifacts feed – npm](https://learn.microsoft.com/en-us/azure/devops/artifacts/npm/npmrc?view=azure-devops&tabs=other)).
-4. Replace `[BASE64_ENCODED_PERSONAL_ACCESS_TOKEN]` with the value from step 2.
-
-After that, `npm install` and `npm publish` against that feed work without `vsts-npm-auth`.
+| **Secrets** | No npm password in git: `npmAuthenticate@0` injects short-lived credentials at runtime. |
+| **npm publish** | Optional stage runs `npm publish` to your **Azure Artifacts** feed. |
 
 ---
 
 ## Prerequisites
 
-- **Node.js** 18 or newer (pipeline uses 20.x).
-- **npm** (comes with Node).
-- For **Azure DevOps**: an organization, a project, and permission to create pipelines and secrets.
+| Tool | Minimum version | Check |
+|------|-----------------|-------|
+| **Node.js** | 18 (pipeline uses 20) | `node --version` |
+| **npm** | comes with Node | `npm --version` |
+| **Git** | any recent | `git --version` |
+
+Install Node.js from [nodejs.org](https://nodejs.org) (LTS recommended). npm is bundled.
 
 ---
 
-## Run the code locally
+## Clone the repository
 
-### 1. Install dependencies
+**PowerShell / CMD (Windows)**
+```powershell
+git clone https://github.com/baluragala/azure-pipelines-with-publish.git
+cd azure-pipelines-with-publish
+```
 
+**Bash (macOS / Linux)**
+```bash
+git clone https://github.com/baluragala/azure-pipelines-with-publish.git
+cd azure-pipelines-with-publish
+```
+
+---
+
+## Install dependencies
+
+> Run this once after cloning, and again whenever `package.json` changes.
+
+**PowerShell / CMD (Windows)**
+```powershell
+npm install
+```
+
+**Bash (macOS / Linux)**
 ```bash
 npm install
 ```
 
-### 2. Start the server
+> **Note:** The project `.npmrc` points to an Azure Artifacts feed for publishing. For local development `npm install` uses the public npm registry (no Azure credentials needed) as long as you have internet access and the feed has **npmjs.org** as an upstream source, or you remove / ignore `.npmrc` locally.
 
+If you get a `401 Unauthorized` on install, set up your `~/.npmrc` credentials (see [Publish to Azure Artifacts](#publish-to-azure-artifacts-npm)) or temporarily remove the project `.npmrc` for local installs.
+
+---
+
+## Run the server locally
+
+**PowerShell (Windows)**
+```powershell
+npm start
+```
+
+Override the port:
+```powershell
+$env:PORT = "4000"; npm start
+```
+
+**CMD (Windows)**
+```cmd
+npm start
+```
+
+Override the port:
+```cmd
+set PORT=4000 && npm start
+```
+
+**Bash (macOS / Linux)**
 ```bash
 npm start
 ```
 
-Default URL: `http://localhost:3000`  
 Override the port:
-
 ```bash
 PORT=4000 npm start
 ```
 
-### 3. Try the API (examples with `curl`)
+Default URL: `http://localhost:3000`
 
-**Health check**
+You should see:
+```
+Server running on port 3000
+```
 
+Stop the server with **Ctrl + C**.
+
+---
+
+## Try the API
+
+The server stores products in memory. Restarting it clears all data.
+
+### Using curl
+
+`curl` is pre-installed on macOS and most Linux distros. On Windows it is included in Git Bash, Windows 10 1803+, and PowerShell 7+.
+
+#### Health check
+
+**PowerShell / CMD / Bash**
 ```bash
 curl -s http://localhost:3000/health
 ```
+Expected: `{"status":"ok"}`
 
-**List products** (empty at first)
+#### List products
 
 ```bash
 curl -s http://localhost:3000/api/products
 ```
 
-**Create a product**
+#### Create a product
 
+**Bash (macOS / Linux)**
 ```bash
 curl -s -X POST http://localhost:3000/api/products \
   -H "Content-Type: application/json" \
   -d '{"name":"Notebook","price":12.5,"description":"Lined A5"}'
 ```
 
-**Get one product** (use the `id` from the create response)
+**PowerShell (Windows)**
+```powershell
+curl -s -X POST http://localhost:3000/api/products `
+  -H "Content-Type: application/json" `
+  -d '{"name":"Notebook","price":12.5,"description":"Lined A5"}'
+```
+
+Or using `Invoke-RestMethod` (PowerShell native):
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/products `
+  -ContentType "application/json" `
+  -Body '{"name":"Notebook","price":12.5,"description":"Lined A5"}'
+```
+
+**CMD (Windows) — use double quotes inside the JSON body**
+```cmd
+curl -s -X POST http://localhost:3000/api/products -H "Content-Type: application/json" -d "{\"name\":\"Notebook\",\"price\":12.5,\"description\":\"Lined A5\"}"
+```
+
+#### Get one product
+
+Use the `id` returned by the create call.
 
 ```bash
 curl -s http://localhost:3000/api/products/1
 ```
 
-**Update**
+#### Update a product
 
+**Bash (macOS / Linux)**
 ```bash
 curl -s -X PUT http://localhost:3000/api/products/1 \
   -H "Content-Type: application/json" \
   -d '{"name":"Notebook Pro","price":15}'
 ```
 
-**Delete**
+**PowerShell (Windows)**
+```powershell
+Invoke-RestMethod -Method Put -Uri http://localhost:3000/api/products/1 `
+  -ContentType "application/json" `
+  -Body '{"name":"Notebook Pro","price":15}'
+```
 
+#### Delete a product
+
+**Bash (macOS / Linux)**
 ```bash
 curl -s -X DELETE http://localhost:3000/api/products/1 -w "\nHTTP %{http_code}\n"
 ```
 
-### API summary
+**PowerShell (Windows)**
+```powershell
+Invoke-RestMethod -Method Delete -Uri http://localhost:3000/api/products/1
+```
+
+### API reference
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Liveness: `{ "status": "ok" }` |
+| `GET` | `/health` | Liveness check: `{ "status": "ok" }` |
 | `GET` | `/api/products` | List all products |
 | `GET` | `/api/products/:id` | Get one; `404` if missing |
 | `POST` | `/api/products` | Create; body needs `name`, numeric `price`; optional `description` |
 | `PUT` | `/api/products/:id` | Update; partial updates allowed |
 | `DELETE` | `/api/products/:id` | Delete; `204` on success |
 
-Data is **in memory** only (for teaching simplicity); restarting the server clears products.
-
 ---
 
-## Tests
+## Run tests
 
+**PowerShell / CMD (Windows)**
+```powershell
+npm test
+```
+
+With coverage report:
+```powershell
+npm run test:coverage
+```
+
+**Bash (macOS / Linux)**
 ```bash
 npm test
 ```
 
-With coverage:
-
+With coverage report:
 ```bash
 npm run test:coverage
 ```
 
-Tests use **Jest** and **Supertest** (HTTP assertions against the Express app without a manual browser).
+Tests use **Jest** and **Supertest** (HTTP assertions against the Express app, no browser needed). Coverage output goes to `coverage/`.
 
 ---
 
 ## Wire up Azure Pipelines
 
-1. Push this repository to **Azure Repos**, **GitHub**, or another supported host connected to Azure DevOps.
-2. In Azure DevOps: **Pipelines** → **New pipeline** → select the repo → **Existing Azure Pipelines YAML file** → choose `/azure-pipelines.yml`.
-3. Run the pipeline. The **Build** stage should pass (install + test).
-4. Ensure the **Azure Artifacts** feed has **npmjs.org** upstream and the **build identities** can use the feed (see *npm publish to Azure Artifacts* above).
-5. To publish: **Run pipeline**, set **Publish package to Azure Artifacts** to **`true`** (string dropdown), and bump **`version`** in `package.json` before each publish (duplicate versions are rejected).
+### 1. Push to a supported host
 
-**When does Publish run?** The **Publish** stage is always in the pipeline; it **skips** unless Build succeeded **and** one of these is true:
+Push this repo to **Azure Repos**, **GitHub**, or any host connected to Azure DevOps.
 
-- Runtime parameter **`publishPackage`** is **`'true'`** (type is **string**, values `true` / `false`), or  
-- Pipeline variable **`PublishToArtifacts`** is **`true`** (for runs where parameters stay at default).
+### 2. Create the pipeline
 
-**Parent pipelines / completion triggers:** Often **parameters are not passed**, so `publishPackage` stays **`false`** and publish would never run. Fix by either passing **`publishPackage: 'true'`** from the parent template, or setting variable **`PublishToArtifacts=true`** on the pipeline (or in a variable group) for runs that should publish.
+1. In Azure DevOps: **Pipelines** → **New pipeline**.
+2. Select your repo host and repo.
+3. Choose **Existing Azure Pipelines YAML file**.
+4. Select `/azure-pipelines.yml` → **Continue** → **Run**.
 
-**Parent passes `publishPackage: "false"` (your case):** That value **disables** publishing via the parameter. You have two options:
+The **Build** stage (install + test) should pass immediately.
 
-1. **Override with a variable (no parent change):** In **this** pipeline → **Edit** → **Variables** → add **`PublishToArtifacts`** = **`true`** (check **Let users override this value at queue time** if you only want it sometimes). Queue the run and set **`PublishToArtifacts`** to **`true`** when you want **`npm publish`** to Azure Artifacts. The condition is `publishPackage == 'true'` **OR** `PublishToArtifacts == 'true'`, so the variable can still enable Publish even when the parent sends **`false`**.
-2. **Change the parent:** When a release should publish, have the parent pass **`publishPackage: 'true'`** (string) in its template / `parameters` block.
+### 3. Pipeline parameters
 
-For **local** `npm install` against this feed, add your Personal Access Token to **`~/.npmrc`** (auth block); keep secrets out of the committed project `.npmrc`.
+| Parameter | Type | Default | Effect |
+|-----------|------|---------|--------|
+| `publishPackage` | string (`true`/`false`) | `false` | Enables the Publish stage for that run. |
+
+The **Publish** stage also runs when the pipeline variable **`PublishToArtifacts`** is set to `true`, even if `publishPackage` is `false` (useful when a parent pipeline always sends `false`).
+
+**To trigger a publish run:**
+- **At queue time:** click **Run pipeline** → set `publishPackage` to `true`.
+- **Via a variable:** add pipeline variable `PublishToArtifacts = true` (**Edit** → **Variables**).
+
+---
+
+## Publish to Azure Artifacts (npm)
+
+### One-time feed setup
+
+1. **Create an Azure Artifacts feed** (or use an existing one).
+2. **Add npmjs.org as an upstream source** on the feed so `npm ci` can download public packages through it.
+3. **Grant publish permissions** — In **Artifacts** → your feed → **Feed settings** → **Permissions**, add both identities below and set each to **Feed Publisher (Contributor)**:
+   - `<YourProject> Build Service (<YourOrg>)` — e.g. `EduStream-AI Build Service (CloudInnovateAzureOrg)`
+   - `Project Collection Build Service (<YourOrg>)`
+
+### Bump the version before each publish
+
+Duplicate versions are rejected. Edit `package.json` and increment `version` before each run that publishes.
+
+### Local npm install / publish against the feed
+
+The project `.npmrc` points to the Azure Artifacts feed. To authenticate locally you need a **Personal Access Token (PAT)**.
+
+#### Windows (PowerShell)
+
+1. In Azure DevOps: **User settings** (top-right) → **Personal access tokens** → **New token**.
+   - Scope: **Packaging** → **Read & write**.
+   - Copy the token.
+
+2. Base64-encode the PAT:
+   ```powershell
+   [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes(":<YOUR_PAT>"))
+   ```
+   Note the leading colon before the PAT — it is required.
+
+3. Add to `%USERPROFILE%\.npmrc` (create if missing):
+   ```
+   ; Azure Artifacts auth — replace <ORG> and <FEED> with your values
+   //pkgs.dev.azure.com/<ORG>/_packaging/<FEED>/npm/registry/:username=anything
+   //pkgs.dev.azure.com/<ORG>/_packaging/<FEED>/npm/registry/:_password=<BASE64_PAT>
+   //pkgs.dev.azure.com/<ORG>/_packaging/<FEED>/npm/registry/:email=anything@example.com
+   //pkgs.dev.azure.com/<ORG>/_packaging/<FEED>/npm/registry/:always-auth=true
+   //pkgs.dev.azure.com/<ORG>/_packaging/<FEED>/npm/:username=anything
+   //pkgs.dev.azure.com/<ORG>/_packaging/<FEED>/npm/:_password=<BASE64_PAT>
+   //pkgs.dev.azure.com/<ORG>/_packaging/<FEED>/npm/:email=anything@example.com
+   //pkgs.dev.azure.com/<ORG>/_packaging/<FEED>/npm/:always-auth=true
+   ```
+
+> **Why not `vsts-npm-auth`?**  
+> `vsts-npm-auth` is a Windows-only interactive login helper. The PAT approach above works on all platforms and is preferred for scripted/CI use.
+
+#### CMD (Windows)
+
+Same PAT steps as PowerShell. For base64-encoding without PowerShell:
+```cmd
+powershell -Command "[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes(':<YOUR_PAT>'))"
+```
+
+Then edit `%USERPROFILE%\.npmrc` with Notepad using the same block as above.
+
+#### macOS / Linux (Bash)
+
+1. Create a PAT (same steps as Windows above).
+
+2. Base64-encode (note the leading colon):
+   ```bash
+   echo -n ":<YOUR_PAT>" | base64
+   ```
+   Copy the single-line output (no newlines).
+
+3. Add to `~/.npmrc` (create if missing):
+   ```
+   # Azure Artifacts auth — replace <ORG> and <FEED> with your values
+   //pkgs.dev.azure.com/<ORG>/_packaging/<FEED>/npm/registry/:username=anything
+   //pkgs.dev.azure.com/<ORG>/_packaging/<FEED>/npm/registry/:_password=<BASE64_PAT>
+   //pkgs.dev.azure.com/<ORG>/_packaging/<FEED>/npm/registry/:email=anything@example.com
+   //pkgs.dev.azure.com/<ORG>/_packaging/<FEED>/npm/registry/:always-auth=true
+   //pkgs.dev.azure.com/<ORG>/_packaging/<FEED>/npm/:username=anything
+   //pkgs.dev.azure.com/<ORG>/_packaging/<FEED>/npm/:_password=<BASE64_PAT>
+   //pkgs.dev.azure.com/<ORG>/_packaging/<FEED>/npm/:email=anything@example.com
+   //pkgs.dev.azure.com/<ORG>/_packaging/<FEED>/npm/:always-auth=true
+   ```
+
+### Troubleshooting 403 / AddPackage errors
+
+If `npm publish` fails with `403 Forbidden` and `You need to have 'AddPackage'`:
+
+1. **Both build identities need Feed Publisher** — By default they get Collaborator (read-only). Add both and set to **Feed Publisher (Contributor)**:
+   - `<YourProject> Build Service (<YourOrg>)`
+   - `Project Collection Build Service (<YourOrg>)`
+2. **Check feed scope** — Confirm the feed URL in `.npmrc` matches the feed you granted permissions on (project-scoped vs org-scoped feeds have different URLs).
+3. **Pipeline in a different project** — Add the pipeline project's build identity explicitly to the feed permissions.
+4. **Job authorization scope** — In **Project settings** → **Pipelines** → **Settings**, review scope restrictions; a very restrictive scope can block the token used by `npmAuthenticate`.
+5. **PAT fallback** — Add pipeline secret variable `ARTIFACTS_NPM_PAT` (PAT with Packaging read/write). The pipeline appends PAT-based auth to `.npmrc` immediately before `npm publish`. This bypasses build-identity issues while `npm ci` still uses `npmAuthenticate`.
+6. **Duplicate version** — If `1.0.0` already exists in the feed, bump `version` in `package.json` and commit before re-running.
 
 ---
 
 ## Project layout
 
 ```
-azure-pipelines.yml   # CI + optional Azure Artifacts npm publish
+azure-pipelines.yml      # CI + optional Azure Artifacts npm publish
 package.json
+.npmrc                   # Feed URL only (no secrets); committed intentionally
 src/
-  app.js              # Express app factory (used by tests and server)
-  server.js           # Binds to PORT and listens
-  productStore.js     # In-memory CRUD store
-  index.js            # Package entry for npm consumers
+  app.js                 # Express app factory (used by tests and server)
+  server.js              # Binds to PORT and listens
+  productStore.js        # In-memory CRUD store
+  index.js               # Package entry for npm consumers
 tests/
-  products.test.js    # API tests
-  productStore.test.js
+  products.test.js       # API integration tests
+  productStore.test.js   # Unit tests for the store
 ```
 
 ---
 
-## Where to go next (outside this repo)
+## Concepts reference
 
-- **Deploy a web app:** Add a stage that deploys to **Azure App Service** (or slots for **blue-green** / swap).
+### CI/CD in one minute
+
+- **Continuous Integration (CI):** Merge code often; each change is built and tested automatically so breaks are caught early.
+- **Continuous Delivery (CD):** After CI passes, automate delivery (here: publish to npm; in other labs: App Service, containers, etc.).
+
+### Azure Pipelines building blocks
+
+| Concept | Description |
+|---------|-------------|
+| **Pipeline** | YAML file (`azure-pipelines.yml`) that defines what runs and when. |
+| **Trigger** | What starts a run (push to `main`, pull request, manual). |
+| **Stage** | A major phase (Build → Publish). Stages run in order. |
+| **Job** | A group of steps that run on one agent (e.g. Ubuntu VM). |
+| **Step** | A single action: install Node, run `npm ci`, run tests, etc. |
+| **Condition** | Logic such as "only run Publish if Build succeeded **and** `publishPackage == 'true'`." |
+
+### Why `npm ci` in the pipeline?
+
+`npm ci` installs exactly what `package-lock.json` specifies — deterministic and preferred in CI so every run uses the same dependency tree. `npm install` may update the lock file.
+
+### Where to go next
+
+- **Deploy a web app:** Add a stage that deploys to **Azure App Service** (or slots for blue-green swap).
 - **Approvals:** Add **environments** with required approvers before production.
-- **More gates:** Linters, security scans (`npm audit`), or policy checks as extra steps or stages.
-
-This README is enough to **teach the ideas**, **run the server**, **exercise the API**, and **connect Azure Pipelines** with optional npm publishing.
+- **More gates:** Linters, security scans (`npm audit`), or policy checks as extra steps.
