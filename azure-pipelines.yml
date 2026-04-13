@@ -59,7 +59,7 @@ stages:
               if [ ! -f "$(Build.SourcesDirectory)/.npmrc" ]; then
                 echo "##[error].npmrc not found at repo root. Create it pointing to your feed."
                 echo "##[error]Example:"
-                echo "##[error]registry=https://pkgs.dev.azure.com/CloudInnovateAzureOrg/_packaging/CloudInnovateAzureOrg/npm/registry/"
+                echo "##[error]registry=https://pkgs.dev.azure.com/shitesh1773454103564/_packaging/shitesh1773454103564/npm/registry/"
                 echo "##[error]always-auth=true"
                 exit 1
               fi
@@ -121,7 +121,7 @@ stages:
           - script: |
               set -e
               cd "$(Pipeline.Workspace)/npm-package"
-              FEED="https://pkgs.dev.azure.com/CloudInnovateAzureOrg/_packaging/CloudInnovateAzureOrg/npm/registry/"
+              FEED="registry=https://pkgs.dev.azure.com/shitesh1773454103564/_packaging/shitesh1773454103564/npm/registry/"
               PKG_NAME=$(node -p "require('./package.json').name")
               PKG_VERSION=$(node -p "require('./package.json').version")
               echo "Checking if ${PKG_NAME}@${PKG_VERSION} already exists in feed..."
